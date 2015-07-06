@@ -1,0 +1,8 @@
+Please extract an MSLR-10k here as MSLR10 folder (or 30k if u're feelin' masochistic)
+
+The dataset can be downloaded from http://research.microsoft.com/en-us/projects/mslr/download.aspx
+The resulting 
+/data/MSLR10 folder must contain Fold1~Fold5 folders with text files as in the original dataset
+
+
+Also extract Kaggle Higgs as /data/Higgs/training.csv if you want to play with it.
