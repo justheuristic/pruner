@@ -6,12 +6,9 @@ Created on Wed Apr 01 02:33:10 2015
 """
 import numpy as np
 import scipy as sp
-from greedy import *
-
+from greedy import greed_up_features_bfs
 from sklearn.externals import joblib
-
-
-
+import copy
 
 from loss_functions import entropy
 
@@ -80,12 +77,38 @@ def split_upper(factory,criteria,returnIndices = False,equalizeWeights = False,n
         
     return ((split, indices ) if returnIndices else split)
 
+
+class SplitPrunedFormula(dict):
+    '''Output of train_splitted_bosts;
+    a dict with criteria field'''
+    def __init__(self,splits,criteria):
+        self.criteria = criteria
+        dict.__init__(self,splits)
+    def predict(self,factory):
+        """predict with a split-pruned formula"""
+        factories, indices =  split_upper(factory,self.criteria,True)
+        y_pred = np.zeros(factory.n_events)
+        for leaf in factories.keys():
+            y_pred[indices[leaf]] = self[leaf].predict(factories[leaf])
+        return y_pred
+    def staged_predict(self,factory):
+        factories, indices =  split_upper(factory,self.criteria,True)
+        y_pred = np.zeros(factory.n_events)
+        staged_predictors = {leaf: self[leaf].staged_predict(factories[leaf]) for leaf in factories.keys()}
+        while len(staged_predictors) != 0:
+            for leaf in staged_predictors.keys():
+                try:
+                    y_pred[indices[leaf]] = staged_predictors[leaf].next()
+                except:
+                    del staged_predictors[leaf]
+            yield y_pred
+            
 def train_splitted_boosts( trees,
                            factory,
                            criteria,
                            loss,
                            learning_rate=0.25,
-                           breadth=0.25,
+                           breadth=1,
                            nTrees_leaf=100,
                            trees_sample_size=100,
                            verbose = True,
@@ -95,9 +118,9 @@ def train_splitted_boosts( trees,
                            weights_outside_leaf = 0.,
                            inclusion_outside_leaf = 0.,
                            use_joblib = False,
-                           joblib_method = "threads",
+                           joblib_backend = "threading",
                            use_joblib_inner = False,
-                           joblib_method_inner = "threads",
+                           joblib_backend_inner = "threading",
                            copy_pred_inner = False,
                            n_jobs = -1,
                            n_jobs_inner=-1,
@@ -112,7 +135,7 @@ def train_splitted_boosts( trees,
     
     leaves = factories.keys()
     if initialTrees == None:
-        initialTrees = {leaf:[] for leaf in leaves}
+        initialTrees = {leaf:None for leaf in leaves}
     
         
     if not use_joblib:
@@ -137,15 +160,15 @@ def train_splitted_boosts( trees,
                                regularizer = regularizer,
                                use_joblib = use_joblib_inner,
                                n_jobs = n_jobs_inner,
-                               joblib_method = joblib_method_inner,
+                               joblib_backend = joblib_backend_inner,
                                copy_pred = copy_pred_inner,
                                initialBunch = initialTrees[leaf]
                                )
 
             classis.append(classi)
     else: #use joblib
-        if joblib_method not in ["threads","processes"]:
-            raise ValueError, "please specify a valid backend type: threads or processes"
+        if joblib_backend not in ["threading","multiprocessing"]:
+            raise ValueError, "please specify a valid backend type: threading or multiprocessing"
         tasks = [joblib.delayed(greed_up_features_bfs)(
                                copy.deepcopy(trees),
                                factories[leaf],
@@ -160,18 +183,18 @@ def train_splitted_boosts( trees,
                                regularizer = regularizer,
                                use_joblib = use_joblib_inner,
                                n_jobs = n_jobs_inner,
-                               joblib_method = joblib_method_inner,
+                               joblib_backend = joblib_backend_inner,
                                copy_pred = copy_pred_inner,
                                initialBunch = copy.deepcopy(initialTrees[leaf])#just in case it's the same...
                                )for leaf in leaves]
                                
         
         classis = joblib.Parallel(n_jobs = n_jobs,
-                                  backend = "threading" if joblib_method == "threads" else "multiprocessing",
+                                  backend = joblib_backend,
                                   verbose=verbose)(tasks)
 
-
-    return {leaves[i]:classis[i] for i in range(len(leaves))}
+    
+    return SplitPrunedFormula({leaves[i]:classis[i] for i in range(len(leaves))},criteria)
     
     
 def wheel_splitted_boosts( initialTrees,
@@ -191,7 +214,7 @@ def wheel_splitted_boosts( initialTrees,
                            inclusion_outside_leaf = 0.,
                            use_joblib = False,
                            use_joblib_inner = False,
-                           joblib_method_inner = "threads",
+                           joblib_backend_inner = "threading",
                            copy_pred_inner = False,
                            n_jobs = -1,
                            n_jobs_inner=-1,
@@ -231,7 +254,7 @@ def wheel_splitted_boosts( initialTrees,
                                random_walk = random_walk,
                                use_joblib = use_joblib_inner,
                                n_jobs = n_jobs_inner,
-                               joblib_method = joblib_method_inner,
+                               joblib_backend = joblib_backend_inner,
                                copy_pred = copy_pred_inner)
 
             classis.append(classi)
@@ -251,22 +274,16 @@ def wheel_splitted_boosts( initialTrees,
                                random_walk = random_walk,
                                use_joblib = use_joblib_inner,
                                n_jobs = n_jobs_inner,
-                               joblib_method = joblib_method_inner,
+                               joblib_backend = joblib_backend_inner,
                                copy_pred = copy_pred_inner)for leaf in leaves]
         classis = joblib.Parallel(n_jobs = n_jobs,
                                   backend = "threading",
                                   verbose=verbose)(tasks)
 
 
-    return {leaves[i]:classis[i] for i in range(len(leaves))}
+    return SplitPrunedFormula({leaves[i]:classis[i] for i in range(len(leaves))},criteria)
         
 
 
-def predict_splitted(factory,criteria,trees):
-    """predict with a splitted trees boost"""
-    factories, indices =  split_upper(factory,criteria,True)
-    y_pred = np.zeros(factory.n_events)
-    for leaf in factories.keys():
-        y_pred[indices[leaf]] = factories[leaf].predict(trees[leaf])
-    return y_pred
+
     

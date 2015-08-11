@@ -10,10 +10,31 @@ import numpy as np
 import random,copy
 from factory import BinaryClassificationFactory,RegressionFactory
 
+
+
+
+class PrunedFormula(list):
+    '''gradient boosting formula with minimal features;
+    a list with bias'''
+    def __init__(self,trees,bias = 0):
+        self.bias = bias
+        list.__init__(self,trees)
+    def __repr__(self):
+        return str(self.bias)+' '+list.__repr__(self)
+    def predict(self,factory):
+        return factory.predict(self)
+    def __add__(self,other):
+        assert type(other) is list
+        return PrunedFormula(list(self)+other,self.bias)
+    def staged_predict(self,factory):
+        return factory.apply_separately(self)
+    
+
+
 def _try_add(tree,factory,loss,margin,y_pred,learning_rate,regularizer):
         """try to add a specific tree and see what happens to loss"""
         newTree = loss.update_leaves(factory,margin,tree,learning_rate,regularizer)
-        newPred = y_pred + factory.predict([newTree])
+        newPred = y_pred + factory.predict(PrunedFormula([newTree]))
         newLoss = loss.score(factory,newPred)
         return newLoss,newTree,newPred
 def _inthread_try_add(trees,factory,loss,margin,y_pred,learning_rate,regularizer):
@@ -37,7 +58,7 @@ def try_add1_bfs(allTrees,factory,learning_rate,
 
     if use_joblib:
         if n_jobs < 0:
-            n_jobs = joblib.cpu_count()
+            n_jobs = joblib.cpu_count() + 1 - n_jobs
         
         indices = [0]+[len(allTrees)*(i+1)/n_jobs for i in range(n_jobs)]
         treeSections = [allTrees[indices[i]:indices[i+1]] for i in range(n_jobs)]
@@ -63,7 +84,9 @@ def try_add1_bfs(allTrees,factory,learning_rate,
 
 
 
-    return [triple[1] for triple in triples[:breadth]],[triple[0] for triple in triples[:breadth]],[triple[2] for triple in triples[:breadth]]
+    return ([triple[1] for triple in triples[:breadth]],
+            [triple[0] for triple in triples[:breadth]],
+            [triple[2] for triple in triples[:breadth]])
 
 
 def greed_up_features_bfs (trees,
@@ -79,18 +102,23 @@ def greed_up_features_bfs (trees,
                            regularizer = 0.,
                            use_joblib = False,
                            n_jobs = -1,
-                           joblib_method = "threads",
+                           joblib_backend = "threading",
                            copy_pred = False,
-                           initialBunch = []):
+                           initialBunch = None,
+                           bias = None):
     """
     Iterative BFS over best ADD-1 results for [nTrees] iterations
     """
     allTrees = copy.copy(trees)
-    if len(initialBunch)==0:
+    if initialBunch is None:
         trees_sample = np.array(random.sample(allTrees,trees_sample_size))    
+        
+        if bias is None:
+            bias = np.average(factory.labels,weights = factory.weights)
+        
         additions,losses,preds = try_add1_bfs(trees_sample,factory,learning_rate,loss,
-                                                      breadth,y_pred=factory.labels*0,regularizer = regularizer)
-        bunches = [[_added] for _added in additions]                                              
+                                                      breadth,y_pred=bias,regularizer = regularizer)
+        bunches = [PrunedFormula([_added],bias) for _added in additions]                                              
     else:
         bunches = [initialBunch]
         preds = [factory.predict(initialBunch)]
@@ -102,15 +130,15 @@ def greed_up_features_bfs (trees,
         if n_jobs < 0:
             n_jobs = joblib.cpu_count()
                 
-        if joblib_method == "threads":
+        if joblib_backend == "threading":
             #create copies of data once to escape GIL forever
             factory = [factory]+[copy.deepcopy(factory) for i in range(n_jobs-1)]
             loss = [copy.deepcopy(loss) for i in range(n_jobs)]
 
-        elif joblib_method == "processes":
+        elif joblib_backend == "multiprocessing":
             pass
         else:
-            raise ValueError, "joblib_method must be either 'threads' or 'processes'"
+            raise ValueError, "joblib_backend must be either 'threading' or 'multiprocessing'"
     
     
 
@@ -130,7 +158,7 @@ def greed_up_features_bfs (trees,
         for bunch,pred in zip(bunches,preds):
             trees_sample = np.array(random.sample(allTrees,trees_sample_size))
             
-            if use_joblib and joblib_method=="threads":
+            if use_joblib and joblib_backend=="threading":
                 #split trees into sections
                 indices = [0]+[len(trees_sample)*(i+1)/n_jobs for i in range(n_jobs)]
                 treeSections = [trees_sample[indices[i]:indices[i+1]] for i in range(n_jobs)]
@@ -202,7 +230,7 @@ def wheel_up_features_bfs (initialBunch,
                            random_walk = True,
                            use_joblib = False,
                            n_jobs = -1,
-                           joblib_method = "threads",
+                           joblib_backend = "threading",
                            copy_pred = False):
     """
     Iterative BFS over best ADD-1 results for [nTrees] iterations
@@ -217,15 +245,15 @@ def wheel_up_features_bfs (initialBunch,
         if n_jobs < 0:
             n_jobs = joblib.cpu_count()
                 
-        if joblib_method == "threads":
+        if joblib_backend == "threading":
             #create copies of data once to escape GIL forever
             factory = [copy.deepcopy(factory) for i in range(n_jobs)]
             loss = [copy.deepcopy(loss) for i in range(n_jobs)]
 
-        elif joblib_method == "processes":
+        elif joblib_backend == "multiprocessing":
             pass
         else:
-            raise ValueError, "joblib_method must be either 'threads' or 'processes'"
+            raise ValueError, "joblib_backend must be either 'threading' or 'multiprocessing'"
     
   
     if verbose:
@@ -240,7 +268,7 @@ def wheel_up_features_bfs (initialBunch,
         bunch_wo = copy.copy(bunch)
         bunch_wo.pop(change_index)
 
-        if use_joblib and joblib_method=="threads":
+        if use_joblib and joblib_backend=="threading":
             #split trees into sections
             indices = [0]+[len(trees_sample)*(i+1)/n_jobs for i in range(n_jobs)]
             treeSections = [trees_sample[indices[i]:indices[i+1]] for i in range(n_jobs)]
@@ -299,5 +327,4 @@ def wheel_up_features_bfs (initialBunch,
             print "sample_size", trees_sample_size          
     return bunch
 
-def predict(factory,trees):
-    return factory.predict(trees)
+

@@ -85,7 +85,7 @@ class MatrixnetClassifier(object):
             numpy.array of shape [n_binary_features] with cuts used (float32)
         """
         n_binary_features = sum(len(x) for x in self.bins)
-        features_ids = numpy.zeros(n_binary_features, dtype='int8')
+        features_ids = numpy.zeros(n_binary_features, dtype='int32')
         cuts = numpy.zeros(n_binary_features, dtype='float32')
         binary_feature_index = 0
         for feature_index in range(len(self.bins)):
@@ -207,6 +207,7 @@ class MatrixnetClassifier(object):
 
 
 import numpy as np
+from sklearn.externals import joblib
  
 cuts = lambda feature,trees: reduce(np.append,[tree[1][tree[0] == feature] for tree in  trees])
 
@@ -222,10 +223,25 @@ def get_inclusion(feature,trees,tolerance=0.):
                            )
             for threshold in set(thresholds)}
     return thrs
-    
-def get_thresholds(trees,n_features, tolerance):
+
+
+def _thresholds_inthread(i,trees,tolerance):
+    return (i,get_inclusion(i,trees,tolerance))
+def get_thresholds(trees,features, tolerance,use_joblib = False,n_jobs = -1):
     """i return the popular thresholds, output format: (feature,threshold,popularity)"""
-    best = {i:get_inclusion(i,trees,tolerance) for i in range(n_features)}
+    
+    if use_joblib:
+
+        best_kv = joblib.Parallel(n_jobs)(joblib.delayed(_thresholds_inthread)(i,trees,tolerance) for i in features)
+        best = {k:v for k,v in best_kv}
+        
+    else:
+        best = {i:get_inclusion(i,trees,tolerance) for i in features}
+                    
     thresholds = reduce(np.append,[zip(np.repeat(i,len(best[i])),best[i].keys(),best[i].values()) for i in best])
     thresholds = thresholds.reshape(thresholds.shape[0]/3,3)
     return thresholds
+
+
+
+    
