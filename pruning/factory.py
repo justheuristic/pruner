@@ -8,13 +8,14 @@ import numpy as np
 import scipy as sp
 
 class DataFactory:
-    def __init__(self,events,labels,weights = None):
+    def __init__(self,events,labels,weights = None,ids = None):
         self.events = events
         self.labels = labels
 
         if weights is None:
             weights = np.ones(labels.shape)
         self.weights = weights
+        self.ids = ids
         
         # extending the data so the number of events is divisible by 8
         self.n_events = len(events)

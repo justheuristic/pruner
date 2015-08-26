@@ -56,9 +56,9 @@ class _LogLoss_auc(_LogLoss):
         return sumLoss/(auc**self.power+self.norm)
         
 class _MSELoss:
-    def __call__(self,factory, pred = None, margin = None):
+    def __call__(self,factory, pred = None,margin = None):
         """
-        send either prediction or margin
+        get error vector
         """
         if margin == None:
             margin = factory.labels-pred
@@ -89,9 +89,26 @@ class _MSELoss:
         compute one-number score for the prediction. The less, the better.
         """
         return np.sum(self(factory,y_pred))
+
+from ranking_metrics import mean_ndcg
+
+class _MSEDCGLoss(_MSELoss):
+    def __init__(self,rank= None):
+        self.rank = rank
+    def score(self, factory, y_pred):
+        """
+        compute one-number score for the prediction. The less, the better.
+        """
+        assert factory.ids is not None
+        ndcg = mean_ndcg(factory.labels, y_pred,factory.ids)
+        return -ndcg
+    
 LogLoss = _LogLoss()
 LogLossAuc = _LogLoss_auc()
 MSELoss = _MSELoss()
+MSEDCGLoss = _MSEDCGLoss()
+MSEDCG10Loss = _MSEDCGLoss(10)
+
 def entropy(distribution):
     """just some entropy"""
     logs = np.array(map(np.log,distribution))
