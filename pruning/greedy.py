@@ -122,7 +122,7 @@ def greed_up_features_bfs (trees,
     else:
         bunches = [initialBunch]
         preds = [factory.predict(initialBunch)]
-        losses = [np.sum(loss(factory,preds[0]))]
+        losses = [loss.score(factory,preds[0])]
     bestScore = min(losses)
 
     
@@ -224,6 +224,7 @@ def wheel_up_features_bfs (initialBunch,
                            nIters=100,
                            trees_sample_size=100,
                            verbose = True,
+                           vali_factory = None,
                            learning_rate_decay = 1.,
                            trees_sample_increase = 0,
                            regularizer = 0.,
@@ -239,7 +240,13 @@ def wheel_up_features_bfs (initialBunch,
     
     bunch = copy.copy(initialBunch)
     pred = factory.predict(bunch)
-    bestScore = sum(loss(factory,pred))
+    bestScore = loss.score(factory,pred)
+    
+    if vali_factory is not None:
+        vali_pred = vali_factory.predict(bunch)
+        vali_score = loss.score(vali_factory,vali_pred)
+        vali_scores = [vali_score]
+    
     
     if use_joblib:
         if n_jobs < 0:
@@ -248,7 +255,7 @@ def wheel_up_features_bfs (initialBunch,
         if joblib_backend == "threading":
             #create copies of data once to escape GIL forever
             factory = [copy.deepcopy(factory) for i in range(n_jobs)]
-            loss = [copy.deepcopy(loss) for i in range(n_jobs)]
+            losses = [copy.deepcopy(loss) for i in range(n_jobs)]
 
         elif joblib_backend == "multiprocessing":
             pass
@@ -266,14 +273,14 @@ def wheel_up_features_bfs (initialBunch,
         change_index= random.randint(0,len(bunch)-1) if random_walk else  (i-1)%len(bunch)
         trees_sample = random.sample(allTrees,trees_sample_size)+ [bunch[change_index]]
         bunch_wo = copy.copy(bunch)
-        bunch_wo.pop(change_index)
+        replaced_tree = bunch_wo.pop(change_index)
 
         if use_joblib and joblib_backend=="threading":
             #split trees into sections
             indices = [0]+[len(trees_sample)*(i+1)/n_jobs for i in range(n_jobs)]
             treeSections = [trees_sample[indices[i]:indices[i+1]] for i in range(n_jobs)]
             
-            pred_wo = pred - factory[0].predict([bunch[change_index]])
+            pred_wo = pred - factory[0].predict(PrunedFormula([bunch[change_index]],bias=0.))
 
             if copy_pred:
                 pred_wo = [copy.deepcopy(pred) for i in range(n_jobs)]
@@ -282,7 +289,7 @@ def wheel_up_features_bfs (initialBunch,
 
             #execute sections in parallel
             tasks = [joblib.delayed(try_add1_bfs)(treeSections[ithread],factory[ithread],
-                                                          learning_rate,loss[ithread],
+                                                          learning_rate,losses[ithread],
                                                           1,pred_wo[ithread],regularizer=regularizer,
                                                           use_joblib=False)
                                                 for ithread in range(n_jobs)]
@@ -292,20 +299,20 @@ def wheel_up_features_bfs (initialBunch,
             _additions,newScores,newPreds = reduce(lambda a,b:[a[i]+b[i] for i in range(3)], _res)
             
         else:
-            pred_wo = pred - factory.predict([bunch[change_index]])
+            pred_wo = pred - factory.predict(PrunedFormula([bunch[change_index]],bias=0.))
 
             _additions,newScores,newPreds = try_add1_bfs(trees_sample,factory,
                                                          learning_rate,loss,
                                                           1,pred_wo,regularizer=regularizer,
                                                           use_joblib=use_joblib,n_jobs=n_jobs)
-        newBunches = [bunch_wo+[_added] for _added in _additions]
-        
+            
+            
+            
 
-        
         learning_rate *= learning_rate_decay
         trees_sample_size = min(len(allTrees),trees_sample_size + trees_sample_increase)
             
-        triples = zip(newScores,newBunches,newPreds)
+        triples = zip(newScores,_additions,newPreds)
         triples.sort(key = lambda el: el[0])
 
         newBestScore = min(newScores)
@@ -314,17 +321,33 @@ def wheel_up_features_bfs (initialBunch,
             pass
         else: 
             bestScore = newBestScore
-            bunch = triples[0][1]
-            bunch.insert(change_index,bunch.pop())
+            _add = triples[0][1]
+            bunch = bunch_wo
+            bunch.insert(change_index,_add)
             pred = triples[0][2]
 
         
         
         if verbose:
             print "\niteration #",itr," ntrees = ", len(bunch),"\nbest loss = ", bestScore,"\nlast loss = ",newBestScore
+            
+            if vali_factory is not None:
+                _add = triples[0][1]
+                vali_pred_wo = vali_pred - vali_factory.predict(PrunedFormula([replaced_tree], bias=0.))
+                vali_pred = vali_pred_wo + vali_factory.predict(PrunedFormula([_add],bias=0.))
+                vali_score = loss.score(vali_factory,vali_pred)
+                print "Validation loss:", vali_score
+                vali_scores.append(vali_score)
+                
+                
             print "changed index",change_index
             print "learning_rate = ", learning_rate
-            print "sample_size", trees_sample_size          
+            print "sample_size", trees_sample_size       
+    if verbose>=2:
+        print "Validation scores history:"
+        from matplotlib import pyplot as plt
+        plt.plot(np.arange(len(vali_scores)),vali_scores)
+        
     return bunch
 
 
